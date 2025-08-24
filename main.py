@@ -17,15 +17,15 @@ def get_model_flavour(tcfg: TrainConfig) -> Qwen3MoeForCausalLM:
         config = Qwen3MoeConfig(use_cache=False)
     elif tcfg.model_flavour == "debug":
         config = Qwen3MoeConfig(
-            # hidden_size=256,
+            hidden_size=256,
             # intermediate_size=768,
             num_hidden_layers=4,
             # num_attention_heads=8,
             # num_key_value_heads=1,
             use_cache=False,
-            # num_experts=32,
+            num_experts=32,
             # num_experts_per_tok=2,
-            # moe_intermediate_size=128,
+            moe_intermediate_size=256,
         )
     else:
         raise ValueError(f"Model flavour {tcfg.model_flavour} not supported")
