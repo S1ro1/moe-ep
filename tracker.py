@@ -1,7 +1,7 @@
 import time
 import torch
 
-import torch.distributed as dist
+from utils import print0
 
 
 class PerformanceLogger:
@@ -20,10 +20,6 @@ class PerformanceLogger:
             self._is_in_warmup = False
 
     def _maybe_log(self):
-        def print0(msg):
-            if dist.get_rank() == 0:
-                print(msg)
-
         if (
             self._current_step % self.logging_steps == 0
             and self._current_step > self.warmup_steps
