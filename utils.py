@@ -63,7 +63,7 @@ def parse_args():
     parser.add_argument("--num-steps", default=100, type=int)
     parser.add_argument("--run-name", default=None, type=str)
     parser.add_argument("--from-pretrained", action="store_true")
-    parser.add_argument("--from-old-checkpoint", action="store_true")
+    parser.add_argument("--from-old-checkpoint", action="store_true", default=True)
 
     args = parser.parse_args()
 
@@ -75,7 +75,7 @@ def prepare_dataloader(
 ) -> torch.utils.data.DataLoader:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    raw_dataset = load_dataset("roneneldan/TinyStories", split="train[:10%]")
+    raw_dataset = load_dataset("roneneldan/TinyStories", split="train")
     if "RANK" in os.environ:
         raw_dataset = split_dataset_by_node(
             raw_dataset, rank=dist.get_rank(), world_size=dist.get_world_size()
@@ -153,6 +153,18 @@ def add_new_moe_params(model: Qwen3MoeForCausalLM, ckpt_path: str):
 
     with safe_open(ckpt_path, framework="pt", device="cpu") as f:
         for k in f.keys():
+            if k.endswith("gate.weight"):
+                tensor = f.get_tensor(k)
+                name, _t = k.rsplit(".", 1)
+
+                parent = name.removesuffix(".gate").rsplit(".", 1)[0]
+                submodule = model.get_submodule(parent)
+                submodule.register_module(
+                    "gate",
+                    torch.nn.Linear(1, 1, bias=False),
+                )
+                submodule.gate.weight = torch.nn.Parameter(tensor)
+
             if any(rk in k for rk in requested_keys):
                 k: str
                 tensor = f.get_tensor(k)
@@ -166,7 +178,7 @@ def add_new_moe_params(model: Qwen3MoeForCausalLM, ckpt_path: str):
 
 def get_model_flavour(tcfg: TrainConfig) -> Qwen3MoeForCausalLM:
     if tcfg.model_flavour == "30b":
-        config = Qwen3MoeConfig(use_cache=False)
+        config = Qwen3MoeConfig(use_cache=False, dtype=torch.bfloat16)
     elif tcfg.model_flavour == "debug":
         config = Qwen3MoeConfig(
             # hidden_size=256,
@@ -185,14 +197,20 @@ def get_model_flavour(tcfg: TrainConfig) -> Qwen3MoeForCausalLM:
 
     if tcfg.from_old_checkpoint:
         if os.environ.get("USE_NEW_MOE", "false").lower() == "false":
-            ckpt_path = "./checkpoints/default-old"
+            ckpt_path = (
+                "./checkpoints/default-old"
+                if tcfg.model_flavour == "debug"
+                else "./checkpoints/old-30b"
+            )
             model = Qwen3MoeForCausalLM.from_pretrained(ckpt_path)
         else:
-            ckpt_path = "./checkpoints/default-new"
-            model = Qwen3MoeForCausalLM.from_pretrained(ckpt_path)
-            model = add_new_moe_params(
-                model, "./checkpoints/default-new/model.safetensors"
+            ckpt_path = (
+                "./checkpoints/default-new"
+                if tcfg.model_flavour == "debug"
+                else "./checkpoints/new-30b-full"
             )
+            print(f"Loading new MoE params from {ckpt_path}")
+            model = Qwen3MoeForCausalLM.from_pretrained(ckpt_path)
 
     elif tcfg.from_pretrained:
         assert tcfg.model_flavour == "30b", "Can only load 30B from pretrained"

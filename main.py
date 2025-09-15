@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 import wandb
 
-from parallelize import apply_fsdp
+from parallelize import parallelize_model
 from tracker import PerformanceLogger
 from utils import (
     TrainConfig,
@@ -23,7 +23,7 @@ from utils import (
 def main(tcfg: TrainConfig):
     set_seed(1)
     model = get_model_flavour(tcfg)
-    model = apply_fsdp(model, mesh=None)
+    model = parallelize_model(model)
     optim = torch.optim.SGD(model.parameters(), lr=1e-5)
     logger = PerformanceLogger()
 
@@ -49,12 +49,13 @@ def main(tcfg: TrainConfig):
         outputs = model(**batch)
         loss = outputs.loss
         print0(f"Step {step} Loss: {loss.item():.4f}")
-        maybe_wandb_log(tcfg, {"loss": loss.item()})
         loss.backward()
-        logger.mark_step(batch["input_ids"])
+        metrics = logger.mark_step(batch["input_ids"])
+        maybe_wandb_log(tcfg, {"loss": loss.item(), **metrics})
         optim.step()
 
     maybe_wandb_log(tcfg, logger.get_metrics())
+    model.save_pretrained(f"./checkpoints/{tcfg.run_name or 'default'}")
 
 
 if __name__ == "__main__":

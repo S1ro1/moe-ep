@@ -29,21 +29,20 @@ class PerformanceLogger:
             print0(
                 f"Step: {self._current_step} | Tokens per second: {metrics['tokens_per_second']} | Iterations per second: {metrics['iterations_per_second']}"
             )
+            return metrics
+        return {}
 
     def mark_step(self, batch: torch.Tensor):
         self._current_step += 1
         self._set_warmup_state()
 
         if self._is_in_warmup:
-            return
-
+            return {}
         self._total_tokens += batch.size(0) * batch.size(1)
 
-        self._maybe_log()
+        return self._maybe_log()
 
     def get_metrics(self):
-        assert self._current_step > 0, "No steps recorded"
-        assert not self._is_in_warmup, "Still in warmup phase"
         return {
             "steps": self._current_step,
             "tokens_per_second": self._total_tokens
