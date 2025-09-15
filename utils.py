@@ -205,7 +205,7 @@ def get_model_flavour(tcfg: TrainConfig) -> Qwen3MoeForCausalLM:
             model = Qwen3MoeForCausalLM.from_pretrained(ckpt_path)
         else:
             ckpt_path = (
-                "./checkpoints/default-new"
+                "./checkpoints/new-debug-full"
                 if tcfg.model_flavour == "debug"
                 else "./checkpoints/new-30b-full"
             )
