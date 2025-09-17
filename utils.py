@@ -75,7 +75,7 @@ def prepare_dataloader(
 ) -> torch.utils.data.DataLoader:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    raw_dataset = load_dataset("roneneldan/TinyStories", split="train")
+    raw_dataset = load_dataset("roneneldan/TinyStories", split="train[:5%]")
     if "RANK" in os.environ:
         raw_dataset = split_dataset_by_node(
             raw_dataset, rank=dist.get_rank(), world_size=dist.get_world_size()
@@ -181,15 +181,9 @@ def get_model_flavour(tcfg: TrainConfig) -> Qwen3MoeForCausalLM:
         config = Qwen3MoeConfig(use_cache=False, dtype=torch.bfloat16)
     elif tcfg.model_flavour == "debug":
         config = Qwen3MoeConfig(
-            # hidden_size=256,
-            # intermediate_size=768,
             num_hidden_layers=8,
-            # num_attention_heads=8,
-            # num_key_value_heads=1,
             use_cache=False,
             num_experts=8,
-            # num_experts_per_tok=2,
-            # moe_intermediate_size=256,
             dtype=torch.bfloat16,
         )
     else:

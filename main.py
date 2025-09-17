@@ -34,7 +34,7 @@ def main(tcfg: TrainConfig):
             config={
                 **asdict(tcfg),
                 **model.config.__dict__,
-                "use_new_moe": os.environ.get("USE_NEW_MOE", "false"),
+                "moe_forward_fn": os.environ.get("QWEN3_MOE_EXPERTS_FORWARD", "torch_grouped_mm")
             },
         )
 
