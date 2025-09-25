@@ -36,7 +36,7 @@ def print0(msg):
 
 
 def maybe_wandb_log(tcfg, metrics: dict):
-    if (not dist.is_initialized() or dist.get_rank() == 0) and tcfg.run_name:
+    if (not dist.is_initialized() or dist.get_rank() == 0) and tcfg.use_wandb:
         wandb.log(metrics)
 
 
@@ -48,7 +48,7 @@ class TrainConfig:
     batch_size: int
     num_steps: int
 
-    run_name: str
+    use_wandb: bool = False
 
     from_pretrained: bool = False
     from_old_checkpoint: bool = True
@@ -61,9 +61,9 @@ def parse_args():
     parser.add_argument("--sequence-length", default=1024, type=int)
     parser.add_argument("--batch-size", default=1, type=int)
     parser.add_argument("--num-steps", default=100, type=int)
-    parser.add_argument("--run-name", default=None, type=str)
     parser.add_argument("--from-pretrained", action="store_true")
     parser.add_argument("--from-old-checkpoint", action="store_true", default=True)
+    parser.add_argument("--use-wandb", action="store_true")
 
     args = parser.parse_args()
 

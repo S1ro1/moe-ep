@@ -19,6 +19,8 @@ from utils import (
     get_model_flavour,
 )
 
+# from transformers import Qwen3MoeForCausalLM
+
 
 def main(tcfg: TrainConfig):
     set_seed(1)
@@ -27,14 +29,18 @@ def main(tcfg: TrainConfig):
     optim = torch.optim.SGD(model.parameters(), lr=1e-5)
     logger = PerformanceLogger()
 
-    if tcfg.run_name and (not dist.is_initialized() or dist.get_rank() == 0):
+    run_name = f"{tcfg.model_flavour}-bs{tcfg.batch_size}-sl{tcfg.sequence_length}-ep{os.environ.get('EP_SIZE', '1')}-fsdp{dist.get_world_size()}"
+
+    if tcfg.use_wandb and (not dist.is_initialized() or dist.get_rank() == 0):
         wandb.init(
             project="Qwen3-moe",
-            name=tcfg.run_name,
+            name=run_name,
             config={
                 **asdict(tcfg),
                 **model.config.__dict__,
-                "moe_forward_fn": os.environ.get("QWEN3_MOE_EXPERTS_FORWARD", "torch_grouped_mm")
+                "moe_forward_fn": os.environ.get(
+                    "QWEN3_MOE_EXPERTS_FORWARD", "torch_grouped_mm"
+                ),
             },
         )
 
@@ -55,7 +61,7 @@ def main(tcfg: TrainConfig):
         optim.step()
 
     maybe_wandb_log(tcfg, logger.get_metrics())
-    model.save_pretrained(f"./checkpoints/{tcfg.run_name or 'default'}")
+    # model.save_pretrained(f"./checkpoints/{run_name}")
 
 
 if __name__ == "__main__":

@@ -56,10 +56,13 @@ class Ep2DpParallel(ParallelStyle):
         self._num_tokens_to_recv = None
         self._reshuffle_indices = None
         self._reshuffled_counts = None
+        self._alignment = 16
 
     def _token_dispatch(self, mod, inputs, device_mesh):
         routed_input, num_tokens_per_expert = inputs
         ep_size = device_mesh.shape[0]
+        num_global_experts = num_tokens_per_expert.size(0)
+        num_local_experts = num_global_experts // ep_size
 
         # num_tokens_per_expert is of shape (num_experts, ), where each element holds the amount of tokens for
         # the corresponding expert from the local rank
@@ -102,12 +105,90 @@ class Ep2DpParallel(ParallelStyle):
             device_mesh.get_group(),
         )
 
-        # routed input is not sorted by expert anymore, rather looks like:
-        # [tokens for local expert 0 from EP rank 0, tokens for local expert 0 from EP rank 1, ..., tokens for local expert 0 from EP rank n, ...]
-        # this needs to be reshuffled back
-        # same applies to grouped_tokens_per_rank
-        # [#tokens for local expert 0 from EP rank 0, #tokens for local expert 0 from EP rank 1, ..., # tokens for local expert 0 from EP rank n, ...]
-        return routed_input, grouped_tokens_per_rank
+        with torch.no_grad():
+            tmp = (
+                (torch.arange(0, num_global_experts) % num_local_experts)
+                .reshape(ep_size, -1)
+                .transpose(1, 0)
+            )
+            indices = tmp.clone()
+            for current_rank in range(ep_size):
+                indices[:, current_rank] = (
+                    tmp[:, current_rank] + current_rank * num_local_experts
+                )
+
+            indices = indices.reshape(-1)
+
+        tokens_per_expert_sorted = (
+            grouped_tokens_per_rank[indices]
+            .reshape(num_local_experts, -1)
+            .sum(dim=1)
+        )
+        tokens_per_expert_sorted = (
+            (tokens_per_expert_sorted + self._alignment - 1)
+            // self._alignment
+            * self._alignment
+        )
+
+        m_offsets = torch.cumsum(tokens_per_expert_sorted, 0)
+        write_offsets = m_offsets - tokens_per_expert_sorted
+        prefix_sum = torch.cumsum(grouped_tokens_per_rank, 0) - grouped_tokens_per_rank
+        max_len = routed_input.size(0) + num_local_experts * self._alignment
+
+        self._permute_indices = self.fill_indices_cpu(
+            grouped_tokens_per_rank,
+            prefix_sum,
+            write_offsets,
+            num_local_experts,
+            ep_size,
+            max_len,
+        )
+
+        routed_input = torch.vstack(
+            (routed_input, routed_input.new_zeros((routed_input.shape[-1])))
+        )
+        self._input_shape = routed_input.shape
+
+        routed_input = routed_input[self._permute_indices, :]
+
+        return routed_input, tokens_per_expert_sorted
+
+    def fill_indices_cpu(
+        self,
+        tokens_per_expert_group: torch.Tensor,
+        start_index_values: torch.Tensor,
+        write_offsets: torch.Tensor,
+        experts_per_rank: int,
+        num_ranks: int,
+        max_len: int,
+    ):
+        # We need to preallocate the output - we ignore device and force it on cpu
+        # device = tokens_per_expert_group.device
+        permuted_indices = torch.full(
+            (max_len,),
+            -1,
+            dtype=torch.int32,
+        )  # device=device)
+        # Fill the permuted indices
+        # For each local expert
+        for e in range(experts_per_rank):
+            write_start = write_offsets[e].item()
+            # For each remote rank
+            for r in range(num_ranks):
+                i = r * experts_per_rank + e
+                start_index = start_index_values[i].item()
+                length = tokens_per_expert_group[i].item()
+                # Fill in the indices
+                if length > 0:
+                    end_idx = min(write_start + length, max_len)
+                    permuted_indices[write_start:end_idx] = torch.arange(
+                        start_index,
+                        start_index + (end_idx - write_start),
+                        dtype=torch.int32,
+                        # device=device,
+                    )
+                write_start += length
+        return permuted_indices
 
     @staticmethod
     def _partition_fn(name, mod, device_mesh):
@@ -118,12 +199,19 @@ class Ep2DpParallel(ParallelStyle):
 
     def _token_combine(self, mod, routed_output, device_mesh):
         # reverse all-to-all from dispatch
+
+        new_out = routed_output.new_empty(self._input_shape)
+        new_out[self._permute_indices, :] = routed_output
+
+        routed_output = new_out[:-1]
+
         routed_output = all_to_all_single_autograd(
             routed_output,
             self._num_tokens_to_send,
             self._num_tokens_to_recv,
             device_mesh.get_group(),
         )
+
         return routed_output
 
     def _apply(self, module: nn.Module, device_mesh: DeviceMesh) -> nn.Module:
